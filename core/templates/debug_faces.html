@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Debug Face Images</title>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        margin: 20px;
+      }
+      .image-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+        gap: 10px;
+      }
+      .image-item {
+        border: 1px solid #ddd;
+        padding: 5px;
+        text-align: center;
+      }
+      .image-item img {
+        max-width: 100%;
+        height: auto;
+      }
+      .image-name {
+        font-size: 0.8em;
+        overflow: hidden;
+        white-space: nowrap;
+        text-overflow: ellipsis;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Debug Face Images</h1>
+    <p>Showing most recent uploaded face images</p>
+
+    <div class="image-grid">
+      {% for image in images %}
+      <div class="image-item">
+        <a href="{{ image.url }}" target="_blank">
+          <img src="{{ image.url }}" alt="{{ image.name }}" />
+        </a>
+        <div class="image-name">{{ image.name }}</div>
+      </div>
+      {% endfor %}
+    </div>
+  </body>
+</html>

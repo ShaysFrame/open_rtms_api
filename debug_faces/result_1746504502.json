@@ -1,0 +1,13 @@
+{
+  "timestamp": "2025-05-06T12:08:22.164559",
+  "recognized_by": "Flutter Mobile App",
+  "results": [
+    {
+      "student_id": "198801424",
+      "name": "mike",
+      "distance": 0.32701518315485806,
+      "attendance_logged": false
+    }
+  ],
+  "image_file": "face_1746504502_Flutter Mobile App.jpg"
+}

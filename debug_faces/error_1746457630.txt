@@ -1,0 +1,2 @@
+Error processing face_1746457630_Flutter Mobile App.jpg:
+UNIQUE constraint failed: core_attendancerecord.student_id, core_attendancerecord.session_id

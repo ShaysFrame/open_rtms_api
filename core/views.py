@@ -1,8 +1,13 @@
-# Try this alternative import approach
+from django.conf import settings
+from django.shortcuts import render
+import os
 import cv2
 import time
+import json
 import face_recognition_models
 import face_recognition
+from django.http import JsonResponse
+from datetime import datetime
 
 import numpy as np
 from rest_framework.views import APIView
@@ -43,15 +48,38 @@ class RegisterFaceView(APIView):
 
 class RecognizeFaceView(APIView):
     def post(self, request):
+        # Extract existing recognized students
+        already_recognized = request.data.get('already_recognized', '')
+        recognized_ids = set(already_recognized.split(
+            ',')) if already_recognized else set()
+        session_id = request.data.get('session_id', 'unknown_session')
+
         image_file = request.FILES.get('image')
         recognized_by = request.data.get('recognized_by', 'mobile_app')
 
-        print(f"Got recognition request with recognized_by: {recognized_by}")
-        print(f"Files in request: {request.FILES.keys()}")
+        # Create a debug folder if it doesn't exist
+        debug_folder = os.path.join(os.path.dirname(
+            os.path.dirname(__file__)), 'debug_faces')
+        os.makedirs(debug_folder, exist_ok=True)
 
         if not image_file:
-            print("ERROR: No image file found in request")
             return Response({'error': 'No image provided'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Save the original uploaded image first
+        timestamp = int(time.time())
+        filename = f"face_{timestamp}_{recognized_by}.jpg"
+        filepath = os.path.join(debug_folder, filename)
+
+        with open(filepath, 'wb') as f:
+            for chunk in image_file.chunks():
+                f.write(chunk)
+
+        print(f"📸 Saved debug image to: {filepath}")
+
+        # Rewind the file for processing
+        image_file.seek(0)
+
+        # Normal processing code...
 
         print(
             f"Image file received: {image_file.name}, size: {image_file.size} bytes")
@@ -90,8 +118,13 @@ class RecognizeFaceView(APIView):
             face_locations = face_recognition.face_locations(
                 enhanced_image,
                 model="hog",
-                number_of_times_to_upsample=3  # Even more upsampling
+                number_of_times_to_upsample=1
             )
+
+            if len(face_locations) > 10:
+                print(
+                    f"WARNING: Limiting from {len(face_locations)} faces to 10")
+                face_locations = face_locations[:3]
 
             # If no faces found, try with original image
             if not face_locations:
@@ -139,36 +172,43 @@ class RecognizeFaceView(APIView):
                         pass
 
             if not encodings:
-                # Try different orientations if no faces found
                 print("No face encodings with standard approach, trying rotations...")
                 for angle in [90, 180, 270]:
                     try:
                         print(f"Trying rotation {angle} degrees...")
                         if angle == 90:
-                            rotated = cv2.rotate(image, cv2.ROTATE_90_CLOCKWISE)
+                            # Use copy to prevent reference issues
+                            rotated = cv2.rotate(
+                                image.copy(), cv2.ROTATE_90_CLOCKWISE)
                         elif angle == 180:
-                            rotated = cv2.rotate(image, cv2.ROTATE_180)
+                            rotated = cv2.rotate(image.copy(), cv2.ROTATE_180)
                         else:
                             rotated = cv2.rotate(
-                                image, cv2.ROTATE_90_COUNTERCLOCKWISE)
+                                image.copy(), cv2.ROTATE_90_COUNTERCLOCKWISE)
 
-                        cv2.imwrite(f"/tmp/rotated_{angle}_{timestamp}.jpg",
-                                    cv2.cvtColor(rotated, cv2.COLOR_RGB2BGR))
-
-                        # Get face locations in rotated image
+                        # Significantly reduce detection sensitivity for rotated images
                         rot_face_locations = face_recognition.face_locations(
-                            rotated, model="hog", number_of_times_to_upsample=3
+                            rotated, model="hog", number_of_times_to_upsample=1  # Use 1 instead of 3
                         )
 
-                        if rot_face_locations:
+                        # Add strict limit on face count to prevent memory issues
+                        if len(rot_face_locations) > 3:  # Much lower than before
+                            print(
+                                f"Found {len(rot_face_locations)} faces in rotated image - limiting to 3")
+                            rot_face_locations = rot_face_locations[:3]
+                        elif rot_face_locations:
                             print(
                                 f"Found {len(rot_face_locations)} faces in rotated image!")
 
-                            # Use this method to safely get encodings
+                        # Add explicit memory cleanup
+                        del rotated  # Explicitly release memory
+
+                        # Process only if we have a reasonable number of faces
+                        if rot_face_locations and len(rot_face_locations) <= 3:
                             rot_encodings = face_recognition.face_encodings(
-                                rotated,
+                                image,  # Use original image
                                 rot_face_locations,
-                                num_jitters=3
+                                num_jitters=1  # Reduce from 3 to 1
                             )
 
                             if rot_encodings:
@@ -205,16 +245,28 @@ class RecognizeFaceView(APIView):
                 print(
                     f"Best match distance: {best_distance:.4f} (threshold: 0.6)")
 
-                if best_distance < 0.6:  # Lower is better match
+                # When creating attendance record, check if already done for this session
+                if best_distance < 0.67:
                     student = students[best_match_index]
-                    # Create attendance record
-                    AttendanceRecord.objects.create(
-                        student=student, recognized_by=recognized_by
-                    )
+
+                    # Skip if already recognized in this session
+                    if student.student_id in recognized_ids:
+                        print(
+                            f"Student {student.name} already recognized in this session, skipping attendance")
+                    else:
+                        # Create attendance record with session ID
+                        AttendanceRecord.objects.create(
+                            student=student,
+                            recognized_by=recognized_by,
+                            session_id=session_id
+                        )
+
+                    # Always return the student info even if attendance wasn't logged
                     results.append({
                         'student_id': student.student_id,
                         'name': student.name,
                         'distance': float(best_distance),
+                        'attendance_logged': student.student_id not in recognized_ids,
                     })
                 else:
                     results.append({
@@ -223,10 +275,64 @@ class RecognizeFaceView(APIView):
                         'distance': None
                     })
 
+            # After recognition, save the result alongside the image
+            result_filename = f"result_{timestamp}.json"
+            result_filepath = os.path.join(debug_folder, result_filename)
+
+            # Save recognition results
+            recognition_result = {
+                'timestamp': datetime.now().isoformat(),
+                'recognized_by': recognized_by,
+                'results': results,
+                'image_file': filename,
+            }
+
+            with open(result_filepath, 'w') as f:
+                import json as _json  # Local import to ensure it's available
+                _json.dump(recognition_result, f, indent=2)
+
+            # Enhanced debug: save image with face rectangles drawn
+            if face_locations:
+                debug_image = image.copy()
+                for face_location in face_locations:
+                    top, right, bottom, left = face_location
+                    cv2.rectangle(debug_image, (left, top),
+                                  (right, bottom), (0, 255, 0), 2)
+
+                rect_filename = f"face_rect_{timestamp}.jpg"
+                rect_filepath = os.path.join(debug_folder, rect_filename)
+                cv2.imwrite(rect_filepath, debug_image)
+
             return Response({'results': results}, status=status.HTTP_200_OK)
 
         except Exception as e:
             print(f"ERROR during face recognition: {str(e)}")
-            import traceback
-            traceback.print_exc()
+
+            # Save error info
+            error_filename = f"error_{timestamp}.txt"
+            error_filepath = os.path.join(debug_folder, error_filename)
+
+            with open(error_filepath, 'w') as f:
+                f.write(f"Error processing {filename}:\n{str(e)}")
+
             return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+def debug_face_viewer(request):
+    """Simple viewer for debug face images"""
+    debug_dir = os.path.join(os.path.dirname(
+        os.path.dirname(__file__)), 'debug_faces')
+    images = []
+
+    # Get all jpg files in the directory
+    for filename in sorted(os.listdir(debug_dir), reverse=True):
+        if filename.endswith('.jpg'):
+            images.append({
+                'url': f'/debug-faces/{filename}',
+                'name': filename,
+                'date': os.path.getmtime(os.path.join(debug_dir, filename))
+            })
+
+    return render(request, 'debug_faces.html', {
+        'images': images[:100]  # Limit to 100 most recent
+    })
