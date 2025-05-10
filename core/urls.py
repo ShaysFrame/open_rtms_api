@@ -10,7 +10,8 @@ os.makedirs(debug_dir, exist_ok=True)
 
 urlpatterns = [
     path('api/register/', views.RegisterFaceView.as_view(), name='register_face'),
-    path('api/recognize/', views.RecognizeFaceView.as_view(), name='recognize_face'),
+    # path('api/recognize/', views.RecognizeFaceView.as_view(), name='recognize_face'),
+    path('api/process-classroom/', views.processClassroom, name='process-classroom'),
 
 
     # Debug face images (DEBUG only - not for production)
