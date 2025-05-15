@@ -45,6 +45,8 @@ class RecognizeFaceView(APIView):
     def post(self, request):
         image_file = request.FILES.get('image')
         recognized_by = request.data.get('recognized_by', 'mobile_app')
+        session_id = request.data.get('session_id', 'unknown_session')
+        print(f"Session ID: {session_id}")
 
         print(f"Got recognition request with recognized_by: {recognized_by}")
         print(f"Files in request: {request.FILES.keys()}")
@@ -162,7 +164,7 @@ class RecognizeFaceView(APIView):
 
                         if rot_face_locations:
                             print(
-                                f"Found {len(rot_face_locations)} faces in rotated image!")
+                                f"After Rotating to {angle}° Found {len(rot_face_locations)} faces in rotated image!")
 
                             # Use this method to safely get encodings
                             rot_encodings = face_recognition.face_encodings(
@@ -184,6 +186,31 @@ class RecognizeFaceView(APIView):
 
             print(f"Successfully generated {len(encodings)} face encodings")
 
+            # Track face locations along with encodings
+            faces_data = []
+            for i, encoding in enumerate(encodings):
+                # We need to preserve which face location corresponds to which encoding
+                # If we're using rotated image, the face_locations will be from rot_face_locations
+                face_location = face_locations[i] if i < len(
+                    face_locations) else None
+
+                if face_location:
+                    top, right, bottom, left = face_location
+                    faces_data.append({
+                        'encoding': encoding,
+                        'location': {
+                            'x': left,
+                            'y': top,
+                            'width': right - left,
+                            'height': bottom - top,
+                        }
+                    })
+                else:
+                    faces_data.append({
+                        'encoding': encoding,
+                        'location': None
+                    })
+
             # Get all stored students
             students = Student.objects.all()
             if not students:
@@ -194,7 +221,15 @@ class RecognizeFaceView(APIView):
             known_encodings = [np.frombuffer(s.embedding) for s in students]
 
             results = []
-            for encoding in encodings:
+            newly_marked = []
+            already_marked = []
+            unknown_faces = 0
+
+            # Use face_data instead of just encodings
+            for face_data in faces_data:
+                encoding = face_data['encoding']
+                face_location = face_data['location']
+
                 distances = face_recognition.face_distance(
                     known_encodings, encoding)
                 if len(distances) == 0:
@@ -207,23 +242,49 @@ class RecognizeFaceView(APIView):
 
                 if best_distance < 0.6:  # Lower is better match
                     student = students[best_match_index]
-                    # Create attendance record
-                    AttendanceRecord.objects.create(
-                        student=student, recognized_by=recognized_by
-                    )
-                    results.append({
+                    # Check if already marked for this session
+                    already_exists = AttendanceRecord.objects.filter(
+                        student=student,
+                        session_id=session_id
+                    ).exists()
+
+                    # Create result dictionary with face location
+                    result_data = {
                         'student_id': student.student_id,
                         'name': student.name,
                         'distance': float(best_distance),
-                    })
-                else:
-                    results.append({
-                        'student_id': None,
-                        'name': 'Unknown',
-                        'distance': None
-                    })
+                        'face_location': face_location,  # Include face location
+                    }
 
-            return Response({'results': results}, status=status.HTTP_200_OK)
+                    if already_exists:
+                        print(
+                            f"Attendance record already exists for this student and session")
+                        result_data['status'] = 'already_marked'
+                        already_marked.append(result_data)
+                    else:
+                        # Create attendance record
+                        AttendanceRecord.objects.create(
+                            student=student,
+                            recognized_by=recognized_by,
+                            session_id=session_id,
+                        )
+                        result_data['status'] = 'newly_marked'
+                        newly_marked.append(result_data)
+                else:
+                    unknown_faces += 1
+                    # Optionally, you could track unknown face locations too
+                    # unknown_faces_data.append({'face_location': face_location})
+
+            results.extend(newly_marked)
+            results.extend(already_marked)
+
+            return Response({'results': results,
+                             'summary': {
+                                 'total_faces_detected': len(encodings),
+                                 'newly_marked': len(newly_marked),
+                                 'already_marked': len(already_marked),
+                                 'unknown_faces': unknown_faces,
+                             }}, status=status.HTTP_200_OK)
 
         except Exception as e:
             print(f"ERROR during face recognition: {str(e)}")

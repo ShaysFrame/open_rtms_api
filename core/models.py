@@ -18,6 +18,11 @@ class AttendanceRecord(models.Model):
     timestamp = models.DateTimeField(default=timezone.now)
     recognized_by = models.CharField(
         max_length=255, blank=True)  # Teacher/device info
+    session_id = models.CharField(max_length=100, blank=True)
+
+    class Meta:
+        # This ensures only one attendance record per student per session
+        unique_together = ['student', 'session_id']
 
     def __str__(self):
         return f"Attendance: {self.student.name} at {self.timestamp}"
