@@ -287,7 +287,7 @@ class RecognizeFaceView(APIView):
                 print(
                     f"Best match distance: {best_distance:.4f} (threshold: 0.6)")
 
-                if best_distance < 0.6:  # Lower is better match
+                if best_distance < 0.4:  # Lower is better match
                     student = students[best_match_index]
                     # Check if already marked for this session
                     already_exists = AttendanceRecord.objects.filter(
