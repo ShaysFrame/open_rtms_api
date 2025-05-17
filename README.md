@@ -1,9 +1,7 @@
 # Open RTMS
 
 ```bash
-$ flutter pub get
-
-$ flutter run
+$ python manage.py run 0.0.0.0:8000
 ```
 
 ![](/slides/Open%20RTMS_Page_01.png)
